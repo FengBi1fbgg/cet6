@@ -1,5 +1,4 @@
 export default async (req, context) => {
-  const store = context.blobs;
   const CORS = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
@@ -11,6 +10,8 @@ export default async (req, context) => {
   });
   if (req.method === 'OPTIONS') return new Response('', { status: 204, headers: CORS });
   try {
+    if (!context.blobs) return json({ error: 'blobs 未启用' }, 500);
+    const store = context.blobs.getStore('main');
     if (req.method === 'GET') {
       const data = await store.get('data', { type: 'json' });
       return json(data || { read: [], words: {}, log: [] });
@@ -32,7 +33,7 @@ export default async (req, context) => {
         if (x && x.id && !seen[x.id]) { seen[x.id] = 1; log.push(x); }
       });
       while (log.length > 500) log.shift();
-      await store.setJSON('data', { read: read, words: words, log: log });
+      await store.setJSON('data', { read, words, log });
       return json({ ok: true });
     }
     return new Response('Method Not Allowed', { status: 405, headers: CORS });
