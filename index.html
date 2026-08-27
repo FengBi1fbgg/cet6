@@ -142,6 +142,14 @@ textarea{width:100%;min-height:150px;padding:8px;border:1px solid #ccc;border-ra
   </div>
 </details>
 
+<!-- 云端动态 -->
+<details class="collapse" id="clogpanel">
+  <summary>☁️ 学习动态（云端共享） <span class="ccount" id="clogcount"></span><span class="arr">▶</span></summary>
+  <div class="cbody">
+    <div class="hint" id="clogstatus"></div>
+    <ul class="udlist" id="cloglist"></ul>
+  </div>
+</details>
 <!-- 文章区 -->
 <div class="card" id="study">
   <h2 id="t"></h2><div class="src" id="s"></div>
@@ -198,6 +206,68 @@ textarea{width:100%;min-height:150px;padding:8px;border:1px solid #ccc;border-ra
 var KEY='cet6_articles', READ='cet6_read', STAT='cet6_stat', REC='cet6_rec', USRDICT='cet6_udict';
 function L(k,d){try{var v=JSON.parse(localStorage.getItem(k));return v==null?d:v}catch(e){return d}}
 function S(k,v){localStorage.setItem(k,JSON.stringify(v))}
+/* ===== 云端共享（Netlify Functions + Blobs） ===== */
+var SYNC_URL='/.netlify/functions/sync';
+var CLOUD_ON=false,CLOUD_ERR=null,CLOUD_TIMER=null;
+var USER_NAME=L('cet6_uname',null);
+if(!USER_NAME){USER_NAME='用户'+Math.floor(1000+Math.random()*9000);S('cet6_uname',USER_NAME)}
+var CLOUD_LOG_PUSHED=[];
+function cloudFetch(body,cb){
+  fetch(SYNC_URL,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined})
+    .then(function(r){return r.json()})
+    .then(function(j){cb&&cb(j)})
+    .catch(function(){cb&&cb(null)});
+}
+function cloudPush(){
+  if(!CLOUD_ON)return;
+  cloudFetch({read:L(READ,[]),words:getUD(),log:CLOUD_LOG_PUSHED},function(){});
+  CLOUD_LOG_PUSHED=[];
+}
+function cloudPull(){
+  if(!CLOUD_ON)return;
+  cloudFetch(null,function(j){
+    if(!j||!j.read)return;
+    var r=L(READ,[]),changed=false;
+    (j.read||[]).forEach(function(id){if(id&&r.indexOf(id)<0){r.push(id);changed=true}});
+    if(changed){S(READ,r);refreshLists()}
+    var d=getUD(),changed2=false;
+    var w=j.words||{};
+    Object.keys(w).forEach(function(k){
+      var z=String(w[k]||'').trim();if(!z)return;
+      if(d[k]){if(d[k].indexOf(z)<0){d[k]=d[k]+'；'+z;changed2=true}}
+      else{d[k]=z;changed2=true}
+    });
+    if(changed2){saveUD(d);renderUD()}
+    renderCloudLog(j.log||[]);
+  });
+}
+function cloudLog(act,key){
+  if(!CLOUD_ON)return;
+  CLOUD_LOG_PUSHED.push({id:Date.now()+'_'+Math.random().toString(36).slice(2,6),t:Date.now(),who:USER_NAME,act:act,key:key});
+  if(CLOUD_LOG_PUSHED.length>=8)cloudPush();
+}
+function renderCloudLog(list){
+  var el=document.getElementById('cloglist'),st=document.getElementById('clogstatus');
+  if(!el)return;
+  if(!CLOUD_ON){if(st)st.textContent=CLOUD_ERR||'未连接云端（仅本地模式）';el.innerHTML='';return}
+  if(st)st.textContent='实时共享中 · 本设备身份：'+USER_NAME+'（每60秒自动同步）';
+  list=list||[];
+  document.getElementById('clogcount').textContent='（最近 '+list.length+' 条）';
+  el.innerHTML=list.length?'':'<li class="hint">暂无动态。查词、读文章后这里会出现。</li>';
+  el.innerHTML=list.map(function(x){
+    var d=new Date(x.t||0),tm=(d.getMonth()+1)+'月'+d.getDate()+'日 '+d.getHours()+':'+String(d.getMinutes()).padStart(2,'0');
+    var icon=x.act==='read'?'📖 读了':(x.act==='word'?'🔍 查词':'📝');
+    return '<li><span class="ud-item"><b>'+esc(x.who||'')+'</b> '+icon+' '+esc(x.key||'')+'<br><span class="hint">'+tm+'</span></span></li>';
+  }).join('');
+}
+function initCloud(){
+  if(!navigator.onLine){CLOUD_ERR='离线模式';renderCloudLog(null);return}
+  CLOUD_ON=true;
+  cloudPull();
+  if(CLOUD_TIMER)clearInterval(CLOUD_TIMER);
+  CLOUD_TIMER=setInterval(function(){cloudPull();cloudPush()},60000);
+  renderCloudLog(null);
+}
 /* 自动找回旧版本数据（只迁移一次，不覆盖新数据） */
 function migrateLegacy(){
   var sets=[
@@ -238,6 +308,7 @@ function addUD(word,zh){
     d[k]=u.join('；');
   } else d[k]=zh;
   saveUD(d); renderUD();
+  cloudLog('word',k+' → '+zh);
 }
 function udAdd(){
   var en=document.getElementById('udadd_en').value.trim().toLowerCase();
@@ -855,7 +926,11 @@ var cur=null;
 function findById(id){var a=all();for(var i=0;i<a.length;i++)if(a[i].id===id)return a[i];return null}
 function markRead(id){
   var r=L(READ,[]);
-  if(r.indexOf(id)<0){r.push(id);S(READ,r)}
+  if(r.indexOf(id)<0){
+    r.push(id);S(READ,r);
+    var a=findById(id);
+    cloudLog('read',a?(a.source||'')+' '+a.title:id);
+  }
   var rec=L(REC,[]);
   rec=rec.filter(function(x){return x!==id});
   rec.unshift(id);
@@ -1125,7 +1200,7 @@ function resetAll(){
 (function(){
   var d=new Date(),w=['日','一','二','三','四','五','六'][d.getDay()];
   document.getElementById('today').textContent=d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日 星期'+w+' · 每天一篇';
-  migrateLegacy();  if('speechSynthesis' in window){loadVoices();speechSynthesis.onvoiceschanged=loadVoices}
+    migrateLegacy(); initCloud();  if('speechSynthesis' in window){loadVoices();speechSynthesis.onvoiceschanged=loadVoices}
   var ps=document.getElementById('pronsel');if(ps)ps.value=pronMode();
   buildGlobalDict();
   buildSentenceIndex();
